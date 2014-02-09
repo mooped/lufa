@@ -67,7 +67,7 @@ int main(void)
 {
 	SetupHardware();
 
-	LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
+	//LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
 	GlobalInterruptEnable();
 
 	for (;;)
@@ -77,45 +77,41 @@ int main(void)
 	}
 }
 
-/** Configures the board hardware and chip peripherals for the demo's functionality. */
-void SetupHardware()
+void Buttons_Init(void)
 {
-#if (ARCH == ARCH_AVR8)
+	// Switch all of Port B and lower bits of Port D to input and enable pullups
+	DDRB &= ~0xff;
+	PORTB |= 0xff;
+	DDRD &= ~(0x0f);// || (1<<7));
+	PORTD |= 0x0f;// || (1<<7);
+}
+
+/** Configures the board hardware and chip peripherals for the demo's functionality. */
+void SetupHardware(void)
+{
 	/* Disable watchdog if enabled by bootloader/fuses */
 	MCUSR &= ~(1 << WDRF);
 	wdt_disable();
 
 	/* Disable clock division */
 	clock_prescale_set(clock_div_1);
-#elif (ARCH == ARCH_XMEGA)
-	/* Start the PLL to multiply the 2MHz RC oscillator to 32MHz and switch the CPU core to run from it */
-	XMEGACLK_StartPLL(CLOCK_SRC_INT_RC2MHZ, 2000000, F_CPU);
-	XMEGACLK_SetCPUClockSource(CLOCK_SRC_PLL);
-
-	/* Start the 32MHz internal RC oscillator and start the DFLL to increase it to 48MHz using the USB SOF as a reference */
-	XMEGACLK_StartInternalOscillator(CLOCK_SRC_INT_RC32MHZ);
-	XMEGACLK_StartDFLL(CLOCK_SRC_INT_RC32MHZ, DFLL_REF_INT_USBSOF, F_USB);
-
-	PMIC.CTRL = PMIC_LOLVLEN_bm | PMIC_MEDLVLEN_bm | PMIC_HILVLEN_bm;
-#endif
 
 	/* Hardware Initialization */
-	Joystick_Init();
-	LEDs_Init();
 	Buttons_Init();
+	//LEDs_Init();
 	USB_Init();
 }
 
 /** Event handler for the library USB Connection event. */
 void EVENT_USB_Device_Connect(void)
 {
-	LEDs_SetAllLEDs(LEDMASK_USB_ENUMERATING);
+	//LEDs_SetAllLEDs(LEDMASK_USB_ENUMERATING);
 }
 
 /** Event handler for the library USB Disconnection event. */
 void EVENT_USB_Device_Disconnect(void)
 {
-	LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
+	//LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
 }
 
 /** Event handler for the library USB Configuration Changed event. */
@@ -127,7 +123,7 @@ void EVENT_USB_Device_ConfigurationChanged(void)
 
 	USB_Device_EnableSOFEvents();
 
-	LEDs_SetAllLEDs(ConfigSuccess ? LEDMASK_USB_READY : LEDMASK_USB_ERROR);
+	//LEDs_SetAllLEDs(ConfigSuccess ? LEDMASK_USB_READY : LEDMASK_USB_ERROR);
 }
 
 /** Event handler for the library USB Control Request reception event. */
@@ -141,6 +137,21 @@ void EVENT_USB_Device_StartOfFrame(void)
 {
 	HID_Device_MillisecondElapsed(&Keyboard_HID_Interface);
 }
+
+const uint8_t scancodes[] = {
+	HID_KEYBOARD_SC_Z,	// Coin
+	HID_KEYBOARD_SC_X,	// Start
+	HID_KEYBOARD_SC_W,	// Up
+	HID_KEYBOARD_SC_S,	// Down
+	HID_KEYBOARD_SC_A,	// Left
+	HID_KEYBOARD_SC_D,	// Right
+	HID_KEYBOARD_SC_F,	// Button 1
+	HID_KEYBOARD_SC_G,	// Button 2
+	HID_KEYBOARD_SC_H,	// Button 3
+	HID_KEYBOARD_SC_V,	// Button 4
+	HID_KEYBOARD_SC_B,	// Button 5
+	HID_KEYBOARD_SC_N,	// Button 6
+};
 
 /** HID class driver callback function for the creation of HID reports to the host.
  *
@@ -160,29 +171,39 @@ bool CALLBACK_HID_Device_CreateHIDReport(USB_ClassInfo_HID_Device_t* const HIDIn
 {
 	USB_KeyboardReport_Data_t* KeyboardReport = (USB_KeyboardReport_Data_t*)ReportData;
 
-	uint8_t JoyStatus_LCL    = Joystick_GetStatus();
-	uint8_t ButtonStatus_LCL = Buttons_GetStatus();
+	uint8_t bank1 = ~PINB;
+	uint8_t bank2 = ~PIND;
 
-	uint8_t UsedKeyCodes = 0;
+	uint8_t usedCodes = 0;
+	uint8_t codeIndex = 0;
 
-	if (JoyStatus_LCL & JOY_UP)
-	  KeyboardReport->KeyCode[UsedKeyCodes++] = HID_KEYBOARD_SC_A;
-	else if (JoyStatus_LCL & JOY_DOWN)
-	  KeyboardReport->KeyCode[UsedKeyCodes++] = HID_KEYBOARD_SC_B;
+	// Minimus button
+	if (bank2 & (1<<7))
+	{
+		KeyboardReport->KeyCode[usedCodes++] = HID_KEYBOARD_SC_F;
+	}
 
-	if (JoyStatus_LCL & JOY_LEFT)
-	  KeyboardReport->KeyCode[UsedKeyCodes++] = HID_KEYBOARD_SC_C;
-	else if (JoyStatus_LCL & JOY_RIGHT)
-	  KeyboardReport->KeyCode[UsedKeyCodes++] = HID_KEYBOARD_SC_D;
+	// Port B (bank 1)
+	for (uint8_t i = 1; codeIndex < 8; i <<= 1, ++codeIndex)
+	{
+		if ((bank1 & i) && usedCodes < 6)
+		{
+	  	KeyboardReport->KeyCode[usedCodes++] = scancodes[codeIndex];
+		}
+	}
+	// Port D (bank 2)
+	for (uint8_t i = 1; codeIndex < 12; i <<= 1, ++codeIndex)
+	{
+		if ((bank2 & i) && usedCodes < 6)
+		{
+	  	KeyboardReport->KeyCode[usedCodes++] = scancodes[codeIndex];
+		}
+	}
 
-	if (JoyStatus_LCL & JOY_PRESS)
-	  KeyboardReport->KeyCode[UsedKeyCodes++] = HID_KEYBOARD_SC_E;
-
-	if (ButtonStatus_LCL & BUTTONS_BUTTON1)
-	  KeyboardReport->KeyCode[UsedKeyCodes++] = HID_KEYBOARD_SC_F;
-
-	if (UsedKeyCodes)
-	  KeyboardReport->Modifier = HID_KEYBOARD_MODIFIER_LEFTSHIFT;
+	if (usedCodes > 0)
+	{
+		KeyboardReport->Modifier = 0;
+	}
 
 	*ReportSize = sizeof(USB_KeyboardReport_Data_t);
 	return false;
@@ -214,6 +235,6 @@ void CALLBACK_HID_Device_ProcessHIDReport(USB_ClassInfo_HID_Device_t* const HIDI
 	if (*LEDReport & HID_KEYBOARD_LED_SCROLLLOCK)
 	  LEDMask |= LEDS_LED4;
 
-	LEDs_SetAllLEDs(LEDMask);
+	//LEDs_SetAllLEDs(LEDMask);
 }
 
